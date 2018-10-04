@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+
+set -o errexit
+
+# Create a build container
+container=$(buildah from centos:7)
+
+# Labels are part of the "buildah config" command
+buildah config --label maintainer="Tinsjourney <tintin@gnali.org>" $container
+
+# Grab the source code outside of the container
+git clone https://github.com/HandBrake/HandBrake.git
+
+# Copy the source inside the container
+buildah copy $container HandBrake /tmp/HandBrake
+
+# Installing dependencies on CentOS (https://handbrake.fr/docs/en/latest/developer/install-dependencies-centos.html)
+buildah run $container yum groupinstall -y "Development Tools" "Additional Development"
+buildah run $container yum install -y fribidi-devel git jansson-devel libogg-devel libsamplerate-devel libtheora-devel libvorbis-devel opus-devel speex-devel xz-devel
+buildah run $container yum install -y epel-release
+buildah run $container yum install -y libass-devel yasm
+buildah run $container yum localinstall -y $(curl -L -s 'https://dl.fedoraproject.org/pub/epel/6/x86_64/Packages/o/' | grep -Eo 'opus-[^">]+\.x86_64\.rpm' | sort -u | awk '{ print "https://dl.fedoraproject.org/pub/epel/6/x86_64/Packages/o/"$0 }')
+buildah run $container curl -L 'https://nasm.us/nasm.repo' -o /etc/yum.repos.d/nasm.repo
+buildah run $container yum install -y nasm
+buildah run $container yum localinstall -y --nogpgcheck https://download1.rpmfusion.org/free/el/rpmfusion-free-release-7.noarch.rpm
+buildah run $container yum install -y lame-devel x264-devel
+
+# Workingdir is also a "buildah config" command
+buildah config --workingdir /tmp/HandBrake $container
+
+buildah run $container ./configure --launch-jobs=$(nproc) --launch --disable-gtk
+
+# Copy build result outside of the container
+mountpoint=$(buildah mount $container)
+cp $mountpoint/tmp/HandBrake/build/HandBrakeCLI .
+buildah umount $container
+
+# Remove building container
+buildah rm $container
+
+##############################
+# Create the HandBrake image #
+##############################
+container=$(buildah from centos:7)
+
+# Labels are part of the "buildah config" command
+buildah config --label maintainer="Tinsjourney <tintin@gnali.org>" $container
+
+# Copy the binary inside the container
+buildah copy $container HandBrakeCLI /usr/local/bin/
+
+# Some Cleaning
+rm -rf HandBrake HandBrakeCLI
+
+# Installing dependencies on CentOS (https://handbrake.fr/docs/en/latest/developer/install-dependencies-centos.html)
+buildah run $container yum install -y epel-release
+buildah run $container yum localinstall -y --nogpgcheck https://download1.rpmfusion.org/free/el/rpmfusion-free-release-7.noarch.rpm
+buildah run $container yum install -y libass lame-libs libsamplerate libtheora x264-libs jansson opus speex
+
+# Entrypoint, too, is a “buildah config” command
+#buildah config --entrypoint  '["/usr/local/bin/HandBrakeCLI"]' $container
+# Use  cmd for debug
+#buildah config --cmd /usr/local/bin/HandBrakeCLI $container
+
+# Finally saves the running container to an image
+buildah commit $container handbrake:latest
+
+# Remove building container
+#buildah rm $container
+
