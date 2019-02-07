@@ -1,6 +1,6 @@
 # Container wrapper for [donmelton/video_transcoding](https://github.com/donmelton/video_transcoding)
 
-This script is based on https://hub.docker.com/r/ntodd/video-transcoding but using buildah commands and a centos based image.
+This script is based on https://hub.docker.com/r/ntodd/video-transcoding but using buildah commands and a fedora based image.
 
 To use it you need to install [buildah](https://github.com/containers/buildah) and [podman](https://github.com/containers/libpod). :warning: On Centos or RHEL, rootless mode is not working as the newuidmap/newgidmap tools are not available there so there is no way to set up the user namespace.
 
@@ -80,3 +80,7 @@ $ ls -hl
 -rw-r--r--. 1 1001 1001 5.8G Oct  7 18:54 original_movie.mkv
 -rw-r--r--. 1 root   root   4.8G Oct  7 22:37 target_movie.mkv
 ```
+
+## Usefull links
+* [Compile FFmpeg](https://trac.ffmpeg.org/wiki/CompilationGuide/Centos)
+* [Installing dependencies on Fedora](https://handbrake.fr/docs/en/latest/developer/install-dependencies-fedora.html)

@@ -1,79 +1,81 @@
 #!/usr/bin/env bash
 
-set -o errexit
-
 ################################
 # Create the builder container #
 ################################
 # Create a build container
-container=$(buildah from centos:7)
+container="handbrake_builder"
+buildah from --name $container fedora
 
-# Installing dependencies on CentOS (https://handbrake.fr/docs/en/latest/developer/install-dependencies-centos.html)
-buildah run $container yum groupinstall -y "Development Tools" "Additional Development"
-buildah run $container yum install -y fribidi-devel git jansson-devel libogg-devel libsamplerate-devel libtheora-devel libvorbis-devel opus-devel speex-devel xz-devel mercurial
-buildah run $container yum install -y epel-release
-buildah run $container yum install -y libass-devel yasm
-buildah run $container yum localinstall -y $(curl -L -s 'https://dl.fedoraproject.org/pub/epel/6/x86_64/Packages/o/' | grep -Eo 'opus-[^">]+\.x86_64\.rpm' | sort -u | awk '{ print "https://dl.fedoraproject.org/pub/epel/6/x86_64/Packages/o/"$0 }')
-buildah run $container curl -L 'https://nasm.us/nasm.repo' -o /etc/yum.repos.d/nasm.repo
-buildah run $container yum install -y nasm
-buildah run $container yum localinstall -y --nogpgcheck https://download1.rpmfusion.org/free/el/rpmfusion-free-release-7.noarch.rpm
-buildah run $container yum install -y lame-devel x264-devel
+# Installing dependencies on Fedora (https://handbrake.fr/docs/en/latest/developer/install-dependencies-fedora.html)
+buildah run $container dnf -y update
+buildah run $container dnf -y groupinstall "Development Tools" "Development Libraries"
+buildah run $container dnf -y install bzip2-devel cmake fontconfig-devel freetype-devel fribidi-devel gcc-c++ git harfbuzz-devel jansson-devel lame-devel libass-devel libogg-devel libsamplerate-devel libtheora-devel libtool libvorbis-devel libxml2-devel libvpx-devel m4 make nasm opus-devel patch python speex-devel tar xz-devel yasm zlib-devel lbzip2 mercurial
+buildah run $container dnf -y localinstall --nogpgcheck https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(cat /etc/system-release | awk '{ print $3}').noarch.rpm
+buildah run $container dnf -y install x264-devel
 
-# Workingdir is also a "buildah config" command
-buildah run $container mkdir -p /tmp/src/ffmpeg/bin
-buildah run $container mkdir -p /tmp/src/ffmpeg/build
-buildah config --env PATH="/tmp/src/ffmpeg/bin:/sbin:/bin:/usr/sbin:/usr/bin" $container
-buildah config --workingdir /tmp/src/ffmpeg $container
+# Set temporary environment
+srcpath=$(buildah run $container mktemp -d)
+buildah run $container mkdir -p $srcpath/bin
+buildah run $container mkdir -p $srcpath/build
+buildah config --env PATH="${srcpath}/bin:/sbin:/bin:/usr/sbin:/usr/bin" $container
+
+##########################
+## Compile HandBrakeCli ##
+##########################
+
+# Grab and install HandBrake
+buildah run $container git clone https://github.com/HandBrake/HandBrake.git $srcpath/HandBrake
+buildah config --workingdir $srcpath/HandBrake $container
+buildah run $container ./configure --prefix=$srcpath --launch-jobs=$(nproc) --launch --disable-gtk
+buildah config --workingdir $srcpath/HandBrake/build $container
+buildah run $container make install
+
+#####################################
+## Compile ffmpeg and dependencies ##
+#####################################
 
 # Grab and install x264
-buildah run $container git clone -b stable http://git.videolan.org/git/x264.git /tmp/src/ffmpeg/x264
-buildah config --workingdir /tmp/src/ffmpeg/x264 $container
-buildah run $container ./configure --prefix="/tmp/src/ffmpeg/build" --bindir="/tmp/src/ffmpeg/bin" --enable-static --disable-opencl
+buildah run $container git clone -b stable http://git.videolan.org/git/x264.git $srcpath/x264
+buildah config --workingdir $srcpath/x264 $container
+buildah run $container ./configure --prefix="${srcpath}/build" --bindir="${srcpath}/bin" --enable-static --disable-opencl
 buildah run $container make -j"$(nproc)"
 buildah run $container make install
 
 # Grab and install fdk-aac
-buildah run $container git clone -b master https://github.com/mstorsjo/fdk-aac /tmp/src/ffmpeg/fdk-aac
-buildah config --workingdir /tmp/src/ffmpeg/fdk-aac $container
+buildah run $container git clone -b master https://github.com/mstorsjo/fdk-aac $srcpath/fdk-aac
+buildah config --workingdir $srcpath/fdk-aac $container
 buildah run $container autoreconf -fiv
-buildah run $container ./configure --prefix="/tmp/src/ffmpeg/build" --disable-shared
+buildah run $container ./configure --prefix="${srcpath}/build" --disable-shared
 buildah run $container make -j"$(nproc)"
 buildah run $container make install
 
 # Grab and install x265
-buildah run $container hg clone -r stable https://bitbucket.org/multicoreware/x265 /tmp/src/ffmpeg/x265
-buildah config --workingdir /tmp/src/ffmpeg/x265/build/linux $container
-buildah run $container cmake -G "Unix Makefiles" -DCMAKE_INSTALL_PREFIX="/tmp/src/ffmpeg/build" -DENABLE_SHARED:bool=off ../../source
+buildah run $container hg clone -r stable https://bitbucket.org/multicoreware/x265 $srcpath/x265
+buildah config --workingdir $srcpath/x265/build/linux $container
+buildah run $container cmake -G "Unix Makefiles" -DCMAKE_INSTALL_PREFIX="${srcpath}/build" -DENABLE_SHARED:bool=off ../../source
 buildah run $container make -j"$(nproc)"
 buildah run $container make install
-
-# Grab and install HandBrake
-buildah run $container git clone https://github.com/HandBrake/HandBrake.git /tmp/src/ffmpeg/HandBrake
-buildah config --workingdir /tmp/src/ffmpeg/HandBrake $container
-buildah run $container ./configure --prefix=/tmp/src/ffmpeg --launch-jobs=$(nproc) --launch --disable-gtk
-buildah config --workingdir /tmp/src/ffmpeg/HandBrake/build $container
-buildah run $container make install
-
 
 # Grab and install libvpx
-buildah run $container git clone -b master https://chromium.googlesource.com/webm/libvpx /tmp/src/ffmpeg/libvpx
-buildah config --workingdir /tmp/src/ffmpeg/libvpx $container
-buildah run $container ./configure --prefix=/tmp/src/ffmpeg/build
+buildah run $container git clone -b master https://chromium.googlesource.com/webm/libvpx $srcpath/libvpx
+buildah config --workingdir $srcpath/libvpx $container
+buildah run $container ./configure --prefix=$srcpath/build --disable-examples --disable-unit-tests --enable-vp9-highbitdepth --as=yasm
 buildah run $container make -j"$(nproc)"
 buildah run $container make install
 
-
 # Grab and install ffmpeg
-buildah run $container git clone -b master https://github.com/FFmpeg/FFmpeg /tmp/src/ffmpeg/ffmpeg_src
-buildah config --workingdir /tmp/src/ffmpeg/ffmpeg_src $container
-buildah config --env PKG_CONFIG_PATH="/tmp/src/ffmpeg/build/lib/pkgconfig" $container
+buildah run $container git clone -b master https://github.com/FFmpeg/FFmpeg $srcpath/ffmpeg_src
+buildah config --workingdir $srcpath/ffmpeg_src $container
+buildah config --env PKG_CONFIG_PATH="${srcpath}/build/lib/pkgconfig" $container
 buildah run $container ./configure \
-	--prefix="/tmp/src/ffmpeg/build" \
+	--prefix="${srcpath}/build" \
 	--pkg-config-flags="--static" \
-	--extra-cflags="-I/tmp/src/ffmpeg/build/include" \
-	--extra-ldflags="-L/tmp/src/ffmpeg/build/lib" \
-	--bindir="/tmp/src/ffmpeg/bin" \
+	--extra-cflags="-I${srcpath}/build/include" \
+	--extra-ldflags="-L${srcpath}/build/lib" \
+	--bindir="${srcpath}/bin" \
 	--extra-libs=-lpthread \
+	--extra-libs=-lm \
 	--enable-gpl \
 	--enable-libass \
 	--enable-libfdk-aac \
@@ -90,35 +92,39 @@ buildah run $container make -j"$(nproc)"
 buildah run $container make install
 
 # Copy build result outside of the container
-mountpoint=$(buildah mount $container)
-cp $mountpoint/tmp/src/ffmpeg/bin/HandBrakeCLI .
-cp $mountpoint/tmp/src/ffmpeg/bin/ff* .
-buildah umount $container
+mountpoint=$(buildah unshare buildah mount $container|sed s/merged/diff/)
+cp $mountpoint/$srcpath/bin/HandBrakeCLI .
+cp $mountpoint/$srcpath/bin/ff* .
 
 # Remove building container
 buildah rm $container
 ##############################
 # Create the HandBrake image #
 ##############################
-container=$(buildah from centos:7)
+container="video-transcoding"
+buildah from --name $container fedora
 
 # Labels are part of the "buildah config" command
-buildah config --label maintainer="Tinsjourney <tintin@gnali.org>" $container
+buildah config --created-by "Tinsjourney" $container
+buildah config --author "tintin@gnali.org @tinsjourney" --label name=video-transcoding $container
+#buildah config --label run="podman run -dt --name reposync -v \${PWD}/myconfig.env:/usr/local/etc/config.env:ro,Z -v \$\{PWD\}/repo:/var/www/html:rw,Z IMAGE" $container
 
 # Copy the binary inside the container
 buildah copy $container HandBrakeCLI /usr/local/bin/
 buildah copy $container ff* /usr/local/bin/
 
-# Some Cleaning
-#rm -f HandBrakeCLI ff*
-
 # Installing dependencies for HandBrakeCLI and ffmpeg
-buildah run $container yum install -y epel-release
-buildah run $container yum localinstall -y --nogpgcheck https://download1.rpmfusion.org/free/el/rpmfusion-free-release-7.noarch.rpm
-buildah run $container yum install -y libass lame-libs libsamplerate libtheora x264-libs jansson opus speex libxcb alsa-lib libXv libva numactl-libs
+# HandBrake: libass lame-libs libsamplerate libvpx libtheora x264-libs jansson opus speex
+# ffmpeg : libass lame-libs opus libtheora libvorbis
+
+# x264-libs is not available on fedora
+buildah run $container dnf -y localinstall --nogpgcheck https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(cat /etc/system-release | awk '{ print $3}').noarch.rpm
+buildah run $container dnf -y install jansson lame-libs libass libsamplerate libtheora libvorbis libvpx opus speex x264-libs
+
+#libxcb alsa-lib libXv libva numactl-libs
 
 # Installing dependencies for video_transcoding
-buildah run $container yum install -y mkvtoolnix libmp4v2 rubygems
+buildah run $container dnf -y install mkvtoolnix libmp4v2 rubygems
 
 # Installing video_transcoding
 buildah run $container gem install --no-document --minimal-deps --clear-sources video_transcoding
@@ -130,12 +136,14 @@ buildah config --entrypoint '["/usr/local/bin/transcode-video"]' $container
 buildah config --workingdir /data $container
 
 # Some cleaning
-buildah run $container yum clean all
+buildah run $container dnf clean all
+buildah run $container rm -rf /var/cache/dnf
 rm -f HandBrakeCLI ff*
 
 # Finally saves the running container to an image
-buildah commit $container video_transcoding:latest
+buildah commit --rm $container video_transcoding:$(date +%Y%m%d)
 
-# Remove building container
-buildah rm $container
-
+# Push images to external repository
+# buildah push reposync:$(date +%Y%m%d) docker://quay.io/tinsjourney/video_transcoding:$(date +%Y%m%d)
+# buildah push reposync:$(date +%Y%m%d) docker://docker.io/tinsjourney/video_transcoding:$(date +%Y%m%d)
+# buildah push reposync:$(date +%Y%m%d) docker://docker.io/tinsjourney/video_transcoding:latest
