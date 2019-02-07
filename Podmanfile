@@ -144,6 +144,6 @@ rm -f HandBrakeCLI ff*
 buildah commit --rm $container video_transcoding:$(date +%Y%m%d)
 
 # Push images to external repository
-# buildah push reposync:$(date +%Y%m%d) docker://quay.io/tinsjourney/video_transcoding:$(date +%Y%m%d)
-# buildah push reposync:$(date +%Y%m%d) docker://docker.io/tinsjourney/video_transcoding:$(date +%Y%m%d)
-# buildah push reposync:$(date +%Y%m%d) docker://docker.io/tinsjourney/video_transcoding:latest
+# buildah push video_transcoding:$(date +%Y%m%d) docker://quay.io/tinsjourney/video_transcoding:$(date +%Y%m%d)
+# buildah push video_transcoding:$(date +%Y%m%d) docker://docker.io/tinsjourney/video_transcoding:$(date +%Y%m%d)
+# buildah push video_transcoding:$(date +%Y%m%d) docker://docker.io/tinsjourney/video_transcoding:latest
